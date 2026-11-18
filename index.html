@@ -350,7 +350,7 @@
             filesArray.push(file);
           }
 
-          if (navigator.canShare && navigator.canShare({ files: filesArray })) {
+if (false && navigator.canShare && navigator.canShare({ files: filesArray })){
             await navigator.share({
               files: filesArray,
               title: currentAlbum.title,
