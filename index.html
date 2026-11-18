@@ -34,12 +34,12 @@
     import {
       Heart, Download, Check, Share2, FolderPlus, Image as ImageIcon,
       Copy, Sparkles, X, ChevronLeft, ChevronRight,
-      Smartphone, CheckSquare, Square, Loader2, Link2, Eye
+      Smartphone, CheckSquare, Square, Loader2, Link2, Eye, Trash2
     } from "https://esm.sh/lucide-react@0.292.0";
 
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
     import {
-      getFirestore, collection, doc, setDoc, updateDoc, onSnapshot, query
+      getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query
     } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
     import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
@@ -155,12 +155,10 @@
           snapshot.forEach((docSnap) => {
             loaded.push({ id: docSnap.id, ...docSnap.data() });
           });
-          if (loaded.length > 0) {
-            loaded.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-            setAlbums([...loaded, ...DEMO_ALBUMS]);
-            if (urlAlbumId && loaded.some((a) => a.id === urlAlbumId)) {
-              setActiveAlbumId(urlAlbumId);
-            }
+          loaded.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          setAlbums([...loaded, ...DEMO_ALBUMS]);
+          if (urlAlbumId && loaded.some((a) => a.id === urlAlbumId)) {
+            setActiveAlbumId(urlAlbumId);
           }
         }, (err) => {
           console.warn("Firestore read note:", err.message);
@@ -393,6 +391,30 @@ if (false && navigator.canShare && navigator.canShare({ files: filesArray })){
         }
       };
 
+      // XOÁ ALBUM
+      const [deletingId, setDeletingId] = useState(null);
+      const handleDeleteAlbum = async (alb) => {
+        if (!alb || deletingId) return;
+        if (!window.confirm(`Bạn có chắc muốn xoá album "${alb.title}"?\nHành động này không thể hoàn tác.`)) return;
+
+        setDeletingId(alb.id);
+        try {
+          if (!alb.id.startsWith("demo-")) {
+            await deleteDoc(doc(db, "albums", alb.id));
+          }
+          setAlbums((prev) => prev.filter((a) => a.id !== alb.id));
+          if (activeAlbumId === alb.id) {
+            const next = albums.find((a) => a.id !== alb.id);
+            if (next) setActiveAlbumId(next.id);
+          }
+          showToast(`Đã xoá album "${alb.title}"`);
+        } catch (err) {
+          showToast("Không xoá được album: " + err.message);
+        } finally {
+          setDeletingId(null);
+        }
+      };
+
       const copyClientLink = (albumId) => {
         const link = `${window.location.origin}/?album=${albumId}`;
         navigator.clipboard.writeText(link);
@@ -532,6 +554,17 @@ if (false && navigator.canShare && navigator.canShare({ files: filesArray })){
                     },
                       React.createElement(Link2, { className: "w-3.5 h-3.5" }),
                       "Copy Link Khách"
+                    ),
+                    React.createElement("button", {
+                      onClick: () => handleDeleteAlbum(alb),
+                      disabled: deletingId === alb.id,
+                      title: "Xoá album",
+                      className: "px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 text-xs font-medium hover:bg-rose-100 flex items-center gap-1 disabled:opacity-50"
+                    },
+                      deletingId === alb.id
+                        ? React.createElement(Loader2, { className: "w-3.5 h-3.5 animate-spin" })
+                        : React.createElement(Trash2, { className: "w-3.5 h-3.5" }),
+                      "Xoá"
                     )
                   )
                 )
