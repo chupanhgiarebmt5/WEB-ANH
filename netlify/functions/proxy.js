@@ -13,7 +13,7 @@ exports.handler = async (event) => {
     const response = await fetch(targetUrl, {
       redirect: "follow",
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"
       }
     });
 
@@ -30,7 +30,7 @@ exports.handler = async (event) => {
       headers: {
         "Access-Control-Allow-Origin": "*",
         "Content-Type": contentType,
-        "Content-Disposition": `attachment; filename="${encodeURIComponent(fileName)}"`,
+        "Content-Disposition": `inline; filename="${encodeURIComponent(fileName)}"`,
         "Cache-Control": "public, max-age=31536000"
       },
       body: buffer.toString("base64"),
