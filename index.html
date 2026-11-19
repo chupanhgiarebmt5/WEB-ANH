@@ -105,14 +105,22 @@
       return null;
     }
 
+    // Kiểm tra xem ảnh có thuộc Google Photos không
+    function isGooglePhotoItem(photo) {
+      const url = photo.fullUrl || photo.thumbUrl || "";
+      return url.includes("googleusercontent.com");
+    }
+
+    // Lấy link tải gốc trực tiếp từ Google Photos (=d)
+    function getGooglePhotoDirectDownloadUrl(photo) {
+      const rawUrl = photo.fullUrl || photo.thumbUrl || "";
+      const baseUrl = rawUrl.split("=")[0];
+      return baseUrl + "=d";
+    }
+
     function buildProxyUrl(photo) {
       if (photo.driveId) {
         return "/.netlify/functions/proxy?id=" + photo.driveId + "&name=" + encodeURIComponent(photo.name);
-      }
-      const rawUrl = photo.fullUrl || photo.thumbUrl || "";
-      if (rawUrl.includes("googleusercontent.com")) {
-        const baseUrl = rawUrl.split("=")[0];
-        return "/.netlify/functions/proxy?url=" + encodeURIComponent(baseUrl + "=d") + "&name=" + encodeURIComponent(photo.name);
       }
       return photo.downloadUrl || photo.fullUrl;
     }
@@ -152,7 +160,7 @@
 
       const showToast = (msg) => {
         setToastMsg(msg);
-        setTimeout(() => setToastMsg(null), 4000);
+        setTimeout(() => setToastMsg(null), 5000);
       };
 
       useEffect(() => {
@@ -321,8 +329,7 @@
                 id: "gp-" + idx + "-" + Date.now(),
                 name: fileName,
                 thumbUrl: cleanBase + "=w1000",
-                fullUrl: cleanBase + "=w2500",
-                downloadUrl: "/.netlify/functions/proxy?url=" + encodeURIComponent(cleanBase + "=d") + "&name=" + encodeURIComponent(fileName)
+                fullUrl: cleanBase + "=w2500"
               };
             });
           }
@@ -355,6 +362,37 @@
         }
       };
 
+      // TẢI TRỰC TIẾP TỪ TRÌNH DUYỆT CHO GOOGLE PHOTOS (TRÁNH BỊ GOOGLE CHẶN IP SERVER NETLIFY)
+      const downloadGooglePhotosDirectly = async (gpList) => {
+        for (let i = 0; i < gpList.length; i++) {
+          const p = gpList[i];
+          setSaveProgress({ current: i + 1, total: gpList.length });
+          const downloadLink = getGooglePhotoDirectDownloadUrl(p);
+
+          if (gpList.length === 1) {
+            const a = document.createElement("a");
+            a.href = downloadLink;
+            a.download = p.name || "photo.jpg";
+            a.rel = "noopener noreferrer";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          } else {
+            const iframe = document.createElement("iframe");
+            iframe.style.display = "none";
+            iframe.src = downloadLink;
+            document.body.appendChild(iframe);
+            setTimeout(() => {
+              if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+            }, 30000);
+          }
+
+          if (i < gpList.length - 1) {
+            await new Promise((r) => setTimeout(r, 500));
+          }
+        }
+      };
+
       const savePhotosToPhone = async (photosToSave) => {
         if (!photosToSave || photosToSave.length === 0) {
           showToast("Hãy tích chọn ít nhất 1 tấm ảnh để lưu!");
@@ -365,81 +403,98 @@
         setSaveProgress({ current: 0, total: photosToSave.length });
 
         try {
-          let completed = 0;
-          const results = await Promise.all(
-            photosToSave.map(async (p) => {
-              const proxyUrl = buildProxyUrl(p);
-              try {
-                const response = await fetch(proxyUrl);
-                if (!response.ok) throw new Error("Proxy status " + response.status);
+          // Tách riêng ảnh Google Photos và ảnh Google Drive / Demo
+          const googlePhotoItems = photosToSave.filter((p) => isGooglePhotoItem(p));
+          const proxyItems = photosToSave.filter((p) => !isGooglePhotoItem(p));
 
-                const blob = await response.blob();
-                if (blob.size < 1000) throw new Error("Invalid image blob");
-
-                const fileName = /\.(jpg|jpeg|png|webp)$/i.test(p.name) ? p.name : p.name + ".jpg";
-                const file = new File([blob], fileName, { type: blob.type || "image/jpeg" });
-                completed++;
-                setSaveProgress({ current: completed, total: photosToSave.length });
-                return { ok: true, file, blob, fileName };
-              } catch {
-                completed++;
-                setSaveProgress({ current: completed, total: photosToSave.length });
-                return { ok: false, photo: p };
-              }
-            })
-          );
-
-          const validItems = results.filter((r) => r.ok);
-          if (validItems.length === 0) {
-            throw new Error("Không tải được dữ liệu ảnh từ máy chủ.");
+          // 1. Xử lý Google Photos: Tải thẳng bằng IP người dùng qua tham số =d
+          if (googlePhotoItems.length > 0) {
+            await downloadGooglePhotosDirectly(googlePhotoItems);
+            if (googlePhotoItems.length === 1) {
+              showToast("Đang tải ảnh gốc " + googlePhotoItems[0].name + " về máy!");
+            } else {
+              showToast("Đang tải " + googlePhotoItems.length + " ảnh Google Photos! (Nếu trình duyệt hỏi cho phép tải nhiều tệp, hãy bấm Cho phép)");
+            }
           }
 
-          const filesArray = validItems.map((r) => r.file);
+          // 2. Xử lý Google Drive / Demo: Lấy Blob qua Proxy -> Lưu Album ĐT hoặc nén ZIP
+          if (proxyItems.length > 0) {
+            let completed = 0;
+            const results = await Promise.all(
+              proxyItems.map(async (p) => {
+                const proxyUrl = buildProxyUrl(p);
+                try {
+                  const response = await fetch(proxyUrl);
+                  if (!response.ok) throw new Error("Proxy status " + response.status);
 
-          if (navigator.canShare && navigator.canShare({ files: filesArray })) {
-            await navigator.share({
-              files: filesArray,
-              title: currentAlbum.title,
-              text: "Lưu " + filesArray.length + " ảnh từ " + STUDIO_DISPLAY_NAME
-            });
-            showToast("Đã chuẩn bị " + filesArray.length + " ảnh! Bấm 'Lưu " + filesArray.length + " hình ảnh' trên bảng hiện ra.");
-            return;
-          }
+                  const blob = await response.blob();
+                  if (blob.size < 1000) throw new Error("Invalid image blob");
 
-          if (validItems.length === 1) {
-            const item = validItems[0];
-            const blobUrl = URL.createObjectURL(item.blob);
-            const a = document.createElement("a");
-            a.href = blobUrl;
-            a.download = item.fileName;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-            showToast("Đã tải ảnh " + item.fileName + " về máy!");
-          } else if (window.JSZip) {
-            const zip = new window.JSZip();
-            const usedNames = new Set();
-            validItems.forEach((item, idx) => {
-              let name = item.fileName;
-              if (usedNames.has(name)) {
-                name = (idx + 1) + "_" + name;
-              }
-              usedNames.add(name);
-              zip.file(name, item.blob);
-            });
+                  const fileName = /\.(jpg|jpeg|png|webp)$/i.test(p.name) ? p.name : p.name + ".jpg";
+                  const file = new File([blob], fileName, { type: blob.type || "image/jpeg" });
+                  completed++;
+                  setSaveProgress({ current: completed, total: proxyItems.length });
+                  return { ok: true, file, blob, fileName };
+                } catch {
+                  completed++;
+                  setSaveProgress({ current: completed, total: proxyItems.length });
+                  return { ok: false, photo: p };
+                }
+              })
+            );
 
-            const zipBlob = await zip.generateAsync({ type: "blob" });
-            const zipUrl = URL.createObjectURL(zipBlob);
-            const a = document.createElement("a");
-            a.href = zipUrl;
-            const safeAlbumName = (currentAlbum.title || "Album_Anh").replace(/[^a-zA-Z0-9_\-\u00C0-\u1EF9 ]/g, "").trim() || "Album_Anh";
-            a.download = safeAlbumName + "_" + validItems.length + "_anh.zip";
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(zipUrl), 10000);
-            showToast("Đã tải trọn bộ " + validItems.length + " ảnh gốc (file ZIP)!");
+            const validItems = results.filter((r) => r.ok);
+            if (validItems.length === 0) {
+              throw new Error("Không tải được dữ liệu ảnh Drive từ máy chủ.");
+            }
+
+            const filesArray = validItems.map((r) => r.file);
+
+            if (navigator.canShare && navigator.canShare({ files: filesArray })) {
+              await navigator.share({
+                files: filesArray,
+                title: currentAlbum.title,
+                text: "Lưu " + filesArray.length + " ảnh từ " + STUDIO_DISPLAY_NAME
+              });
+              showToast("Đã chuẩn bị " + filesArray.length + " ảnh! Bấm 'Lưu " + filesArray.length + " hình ảnh' trên bảng hiện ra.");
+              return;
+            }
+
+            if (validItems.length === 1) {
+              const item = validItems[0];
+              const blobUrl = URL.createObjectURL(item.blob);
+              const a = document.createElement("a");
+              a.href = blobUrl;
+              a.download = item.fileName;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+              showToast("Đã tải ảnh " + item.fileName + " về máy!");
+            } else if (window.JSZip) {
+              const zip = new window.JSZip();
+              const usedNames = new Set();
+              validItems.forEach((item, idx) => {
+                let name = item.fileName;
+                if (usedNames.has(name)) {
+                  name = (idx + 1) + "_" + name;
+                }
+                usedNames.add(name);
+                zip.file(name, item.blob);
+              });
+
+              const zipBlob = await zip.generateAsync({ type: "blob" });
+              const zipUrl = URL.createObjectURL(zipBlob);
+              const a = document.createElement("a");
+              a.href = zipUrl;
+              const safeAlbumName = (currentAlbum.title || "Album_Anh").replace(/[^a-zA-Z0-9_\-\u00C0-\u1EF9 ]/g, "").trim() || "Album_Anh";
+              a.download = safeAlbumName + "_" + validItems.length + "_anh.zip";
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              setTimeout(() => URL.revokeObjectURL(zipUrl), 10000);
+              showToast("Đã tải trọn bộ " + validItems.length + " ảnh gốc (file ZIP)!");
+            }
           }
         } catch (err) {
           if (err.name !== "AbortError") {
@@ -560,264 +615,4 @@
             )
           ),
 
-          React.createElement("div", { className: "bg-white rounded-2xl p-6 shadow-sm border border-stone-200 space-y-4" },
-            React.createElement("h3", { className: "text-base font-bold text-zinc-900" }, "Danh Sách Album Đã Tạo (" + albums.length + ")"),
-            React.createElement("div", { className: "divide-y divide-stone-100" },
-              albums.map((alb) =>
-                React.createElement("div", { key: alb.id, className: "py-3.5 flex flex-wrap items-center justify-between gap-3" },
-                  React.createElement("div", { className: "flex items-center gap-3" },
-                    React.createElement("img", { src: alb.coverUrl, className: "w-12 h-12 rounded-lg object-cover bg-stone-100" }),
-                    React.createElement("div", null,
-                      React.createElement("div", { className: "flex items-center gap-2" },
-                        React.createElement("p", { className: "font-semibold text-sm text-zinc-900" }, alb.title),
-                        alb.sourceType === "google_photos" && React.createElement("span", { className: "text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold" }, "Google Photos"),
-                        alb.sourceType === "google_drive" && React.createElement("span", { className: "text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold" }, "Drive")
-                      ),
-                      React.createElement("p", { className: "text-xs text-zinc-500" },
-                        (alb.photos?.length || 0) + " ảnh • Khách thả tim: " + (alb.favorites || []).length + " tấm"
-                      )
-                    )
-                  ),
-                  React.createElement("div", { className: "flex items-center gap-2" },
-                    React.createElement("button", {
-                      onClick: () => { setActiveAlbumId(alb.id); setIsAdminMode(false); },
-                      className: "px-3 py-1.5 rounded-lg bg-stone-100 text-zinc-800 text-xs font-medium hover:bg-stone-200"
-                    }, "Mở xem"),
-                    React.createElement("button", {
-                      onClick: () => copyClientLink(alb.id),
-                      className: "px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-medium hover:bg-amber-700 flex items-center gap-1"
-                    },
-                      React.createElement(Link2, { className: "w-3.5 h-3.5" }),
-                      "Copy Link Khách"
-                    ),
-                    !alb.id.startsWith("demo-") && React.createElement("button", {
-                      onClick: () => handleDeleteAlbum(alb),
-                      disabled: deletingId === alb.id,
-                      title: "Xóa album này",
-                      className: "px-2.5 py-1.5 rounded-lg bg-rose-50 text-rose-600 border border-rose-200 text-xs font-medium hover:bg-rose-600 hover:text-white transition flex items-center gap-1 disabled:opacity-50"
-                    },
-                      deletingId === alb.id
-                        ? React.createElement(Loader2, { className: "w-3.5 h-3.5 animate-spin" })
-                        : React.createElement("span", null, "🗑"),
-                      "Xóa"
-                    )
-                  )
-                )
-              )
-            )
-          )
-        ) :
-
-        React.createElement("div", { className: "flex-1" },
-          React.createElement("div", { className: "relative h-[42vh] md:h-[52vh] w-full overflow-hidden bg-zinc-900" },
-            React.createElement("img", {
-              src: currentAlbum?.coverUrl,
-              alt: currentAlbum?.title,
-              className: "w-full h-full object-cover opacity-80 scale-105 transition duration-700"
-            }),
-            React.createElement("div", { className: "absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent" }),
-            React.createElement("div", { className: "absolute inset-0 flex flex-col items-center justify-end pb-8 px-4 text-center text-white" },
-              React.createElement("p", { className: "text-[11px] uppercase tracking-[0.25em] text-amber-300 font-semibold mb-2" },
-                STUDIO_DISPLAY_NAME
-              ),
-              React.createElement("h1", { className: "font-serif-title text-3xl md:text-5xl font-bold tracking-wide max-w-2xl" },
-                currentAlbum?.title
-              ),
-              React.createElement("p", { className: "text-xs text-stone-300 mt-2" },
-                (currentAlbum?.photos?.length || 0) + " Ảnh Chất Lượng Cao • Lưu Trực Tiếp Về Điện Thoại"
-              )
-            )
-          ),
-
-          React.createElement("div", { className: "sticky top-0 z-20 bg-[#FAF8F5]/95 backdrop-blur-md border-b border-stone-200 px-3 md:px-8 py-3" },
-            React.createElement("div", { className: "max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2" },
-              React.createElement("div", { className: "flex items-center gap-1.5 overflow-x-auto hide-scrollbar" },
-                React.createElement("button", {
-                  onClick: () => setFilterTab("all"),
-                  className: "px-3.5 py-1.5 rounded-full text-xs font-semibold transition " + (
-                    filterTab === "all" ? "bg-zinc-900 text-white" : "bg-stone-200/70 text-zinc-700"
-                  )
-                }, "Tất cả (" + (currentAlbum?.photos?.length || 0) + ")"),
-                React.createElement("button", {
-                  onClick: () => setFilterTab("selected"),
-                  className: "px-3.5 py-1.5 rounded-full text-xs font-semibold transition " + (
-                    filterTab === "selected" ? "bg-amber-600 text-white" : "bg-stone-200/70 text-zinc-700"
-                  )
-                }, "Đã chọn tải (" + selectedIds.length + ")"),
-                React.createElement("button", {
-                  onClick: () => setFilterTab("favorites"),
-                  className: "px-3.5 py-1.5 rounded-full text-xs font-semibold transition flex items-center gap-1 " + (
-                    filterTab === "favorites" ? "bg-rose-600 text-white" : "bg-stone-200/70 text-zinc-700"
-                  )
-                },
-                  React.createElement(Heart, { className: "w-3.5 h-3.5 fill-current" }),
-                  "Yêu thích (" + (currentAlbum?.favorites || []).length + ")"
-                )
-              ),
-
-              React.createElement("div", { className: "flex items-center gap-2" },
-                React.createElement("button", {
-                  onClick: toggleSelectAll,
-                  className: "px-3 py-1.5 rounded-full text-xs font-semibold bg-white border border-stone-300 text-zinc-800 hover:bg-stone-100 flex items-center gap-1.5"
-                },
-                  selectedIds.length === filteredPhotos.length && filteredPhotos.length > 0
-                    ? React.createElement(CheckSquare, { className: "w-3.5 h-3.5 text-amber-600" })
-                    : React.createElement(Square, { className: "w-3.5 h-3.5 text-zinc-400" }),
-                  selectedIds.length === filteredPhotos.length && filteredPhotos.length > 0 ? "Bỏ chọn hết" : "Chọn tất cả"
-                ),
-                (currentAlbum?.favorites || []).length > 0 && React.createElement("button", {
-                  onClick: copyFavoriteNames,
-                  className: "hidden md:flex px-3 py-1.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 items-center gap-1"
-                },
-                  React.createElement(Copy, { className: "w-3.5 h-3.5" }),
-                  "Copy mã ảnh Tim"
-                )
-              )
-            )
-          ),
-
-          React.createElement("div", { className: "max-w-7xl mx-auto px-2 md:px-8 py-4" },
-            React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 md:gap-4" },
-              filteredPhotos.map((photo, index) => {
-                const isSelected = selectedIds.includes(photo.id);
-                const isFav = (currentAlbum?.favorites || []).includes(photo.name);
-                return React.createElement("div", {
-                  key: photo.id,
-                  onClick: () => setLightboxIndex(index),
-                  className: "group relative aspect-[3/4] rounded-xl overflow-hidden bg-stone-200 cursor-pointer border-2 transition " + (
-                    isSelected ? "border-amber-500 scale-[0.98]" : "border-transparent"
-                  )
-                },
-                  React.createElement("img", {
-                    src: photo.thumbUrl,
-                    alt: photo.name,
-                    loading: "lazy",
-                    className: "w-full h-full object-cover group-hover:scale-105 transition duration-500"
-                  }),
-                  React.createElement("button", {
-                    onClick: (e) => toggleSelect(photo.id, e),
-                    className: "absolute top-2.5 left-2.5 w-8 h-8 rounded-full flex items-center justify-center transition shadow-md " + (
-                      isSelected ? "bg-amber-500 text-white" : "bg-black/40 text-white hover:bg-black/60 backdrop-blur-xs"
-                    )
-                  },
-                    React.createElement(Check, { className: "w-4 h-4 stroke-[2.5]" })
-                  ),
-                  React.createElement("button", {
-                    onClick: (e) => toggleFavorite(photo.name, e),
-                    className: "absolute top-2.5 right-2.5 w-8 h-8 rounded-full flex items-center justify-center transition shadow-md " + (
-                      isFav ? "bg-rose-500 text-white" : "bg-black/40 text-white hover:bg-black/60 backdrop-blur-xs"
-                    )
-                  },
-                    React.createElement(Heart, { className: "w-4 h-4 " + (isFav ? "fill-current" : "") })
-                  ),
-                  React.createElement("button", {
-                    onClick: (e) => {
-                      e.stopPropagation();
-                      savePhotosToPhone([photo]);
-                    },
-                    className: "absolute bottom-2.5 right-2.5 px-2.5 py-1.5 rounded-full bg-white/90 text-zinc-900 text-[11px] font-bold shadow-md flex items-center gap-1 hover:bg-white active:scale-95 transition"
-                  },
-                    React.createElement(Download, { className: "w-3.5 h-3.5 text-amber-600" }),
-                    "Lưu"
-                  ),
-                  React.createElement("div", { className: "absolute bottom-2.5 left-2.5 pointer-events-none" },
-                    React.createElement("span", { className: "text-[10px] font-medium text-white bg-black/50 px-2 py-0.5 rounded-md backdrop-blur-xs" },
-                      photo.name
-                    )
-                  )
-                );
-              })
-            )
-          )
-        ),
-
-        React.createElement("div", {
-          className: "fixed bottom-4 left-1/2 -translate-x-1/2 z-40 w-[94vw] max-w-xl bg-zinc-900/95 backdrop-blur-md text-white rounded-2xl p-3 shadow-2xl border border-zinc-700 flex items-center justify-between gap-3"
-        },
-          React.createElement("div", { className: "flex items-center gap-2.5 pl-1" },
-            React.createElement("div", { className: "w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0" },
-              React.createElement(Smartphone, { className: "w-5 h-5" })
-            ),
-            React.createElement("div", null,
-              React.createElement("p", { className: "text-xs font-bold" },
-                selectedIds.length > 0
-                  ? "Đã chọn " + selectedIds.length + " tấm ảnh"
-                  : "Chạm dấu ✓ trên ảnh để chọn nhiều tấm"
-              ),
-              React.createElement("p", { className: "text-[11px] text-zinc-400" },
-                "Lưu thẳng vào Album Ảnh iPhone / Android"
-              )
-            )
-          ),
-          React.createElement("button", {
-            disabled: isSavingPhone,
-            onClick: () => {
-              const listToSave = selectedIds.length > 0
-                ? currentAlbum.photos.filter((p) => selectedIds.includes(p.id))
-                : filteredPhotos;
-              savePhotosToPhone(listToSave);
-            },
-            className: "px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shrink-0 flex items-center gap-1.5 shadow-lg active:scale-95 transition disabled:opacity-50"
-          },
-            isSavingPhone ? React.createElement(Loader2, { className: "w-4 h-4 animate-spin" }) : React.createElement(Download, { className: "w-4 h-4 stroke-[2.5]" }),
-            isSavingPhone
-              ? "Đang chuẩn bị (" + saveProgress.current + "/" + saveProgress.total + ")..."
-              : selectedIds.length > 0
-                ? "Lưu " + selectedIds.length + " Ảnh Về ĐT"
-                : "Lưu Tất Cả (" + filteredPhotos.length + ")"
-          )
-        ),
-
-        lightboxIndex !== null && filteredPhotos[lightboxIndex] && React.createElement("div", {
-          className: "fixed inset-0 z-50 bg-black/95 flex flex-col justify-between p-4"
-        },
-          React.createElement("div", { className: "flex items-center justify-between text-white" },
-            React.createElement("span", { className: "text-sm font-medium" },
-              (lightboxIndex + 1) + " / " + filteredPhotos.length + " — " + filteredPhotos[lightboxIndex].name
-            ),
-            React.createElement("button", {
-              onClick: () => setLightboxIndex(null),
-              className: "p-2 rounded-full bg-white/10 hover:bg-white/20"
-            }, React.createElement(X, { className: "w-5 h-5" }))
-          ),
-          React.createElement("div", { className: "relative flex-1 flex items-center justify-center my-2 overflow-hidden" },
-            React.createElement("button", {
-              onClick: () => setLightboxIndex((lightboxIndex - 1 + filteredPhotos.length) % filteredPhotos.length),
-              className: "absolute left-2 p-2.5 rounded-full bg-white/10 text-white hover:bg-white/20"
-            }, React.createElement(ChevronLeft, { className: "w-6 h-6" })),
-            React.createElement("img", {
-              src: filteredPhotos[lightboxIndex].fullUrl,
-              className: "max-h-[75vh] max-w-full object-contain rounded-lg"
-            }),
-            React.createElement("button", {
-              onClick: () => setLightboxIndex((lightboxIndex + 1) % filteredPhotos.length),
-              className: "absolute right-2 p-2.5 rounded-full bg-white/10 text-white hover:bg-white/20"
-            }, React.createElement(ChevronRight, { className: "w-6 h-6" }))
-          ),
-          React.createElement("div", { className: "flex items-center justify-center gap-3 pb-2" },
-            React.createElement("button", {
-              onClick: () => toggleFavorite(filteredPhotos[lightboxIndex].name),
-              className: "px-4 py-2.5 rounded-xl bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5"
-            },
-              React.createElement(Heart, {
-                className: "w-4 h-4 " + ((currentAlbum?.favorites || []).includes(filteredPhotos[lightboxIndex].name) ? "fill-rose-500 text-rose-500" : "")
-              }),
-              "Thả tim"
-            ),
-            React.createElement("button", {
-              onClick: () => savePhotosToPhone([filteredPhotos[lightboxIndex]]),
-              className: "px-5 py-2.5 rounded-xl bg-amber-500 text-zinc-950 text-xs font-bold flex items-center gap-1.5"
-            },
-              React.createElement(Download, { className: "w-4 h-4 stroke-[2.5]" }),
-              "Lưu tấm này về ĐT"
-            )
-          )
-        )
-      );
-    }
-
-    const root = createRoot(document.getElementById("root"));
-    root.render(React.createElement(App));
-  </script>
-</body>
-</html>
+          React.createElement("div", { className: "bg-white rounded-2xl p-6 shadow-sm border border-stone-200 space-y-4"
