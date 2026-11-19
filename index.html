@@ -32,7 +32,7 @@
     import React, { useState, useEffect, useMemo } from "https://esm.sh/react@18.2.0";
     import { createRoot } from "https://esm.sh/react-dom@18.2.0/client";
     import {
-      Heart, Download, Check, Share2, FolderPlus,
+      Heart, Download, Check, Share2, FolderPlus, Image as ImageIcon,
       Copy, Sparkles, X, ChevronLeft, ChevronRight,
       Smartphone, CheckSquare, Square, Loader2, Link2, Eye
     } from "https://esm.sh/lucide-react@0.292.0";
@@ -43,6 +43,7 @@
     } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
     import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
+    // --- CẤU HÌNH FIREBASE CỦA BẠN ---
     const firebaseConfig = {
       apiKey: "AIzaSyDFQZi30JoL4A873TntQCxYalRY2QPdcbI",
       authDomain: "chupanhgiare-e4807.firebaseapp.com",
@@ -57,8 +58,10 @@
     const db = getFirestore(app);
     const auth = getAuth(app);
 
+    // --- GOOGLE DRIVE API KEY MẶC ĐỊNH CỦA BẠN ---
     const DEFAULT_DRIVE_API_KEY = "AIzaSyArx0lpJ88MJE-gJFnyWwvAWHawsWIv_kc";
 
+    // --- BỘ ẢNH MẪU DEMO ---
     const DEMO_ALBUMS = [
       {
         id: "demo-phu-quoc",
@@ -73,11 +76,14 @@
           { id: "p1", name: "PQ_001.JPG", thumbUrl: "https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=800&q=80", fullUrl: "https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1600&q=90" },
           { id: "p2", name: "PQ_002.JPG", thumbUrl: "https://images.unsplash.com/photo-1511285560929-80b456fea0bc?auto=format&fit=crop&w=800&q=80", fullUrl: "https://images.unsplash.com/photo-1511285560929-80b456fea0bc?auto=format&fit=crop&w=1600&q=90" },
           { id: "p3", name: "PQ_003.JPG", thumbUrl: "https://images.unsplash.com/photo-1520854221256-17451cc331bf?auto=format&fit=crop&w=800&q=80", fullUrl: "https://images.unsplash.com/photo-1520854221256-17451cc331bf?auto=format&fit=crop&w=1600&q=90" },
-          { id: "p4", name: "PQ_004.JPG", thumbUrl: "https://images.unsplash.com/photo-1465495976277-4387d4b0b4c6?auto=format&fit=crop&w=800&q=80", fullUrl: "https://images.unsplash.com/photo-1465495976277-4387d4b0b4c6?auto=format&fit=crop&w=1600&q=90" }
+          { id: "p4", name: "PQ_004.JPG", thumbUrl: "https://images.unsplash.com/photo-1465495976277-4387d4b0b4c6?auto=format&fit=crop&w=800&q=80", fullUrl: "https://images.unsplash.com/photo-1465495976277-4387d4b0b4c6?auto=format&fit=crop&w=1600&q=90" },
+          { id: "p5", name: "PQ_005.JPG", thumbUrl: "https://images.unsplash.com/photo-1537633552985-df8429e8048b?auto=format&fit=crop&w=800&q=80", fullUrl: "https://images.unsplash.com/photo-1537633552985-df8429e8048b?auto=format&fit=crop&w=1600&q=90" },
+          { id: "p6", name: "PQ_006.JPG", thumbUrl: "https://images.unsplash.com/photo-1583939003579-730e3918a45a?auto=format&fit=crop&w=800&q=80", fullUrl: "https://images.unsplash.com/photo-1583939003579-730e3918a45a?auto=format&fit=crop&w=1600&q=90" }
         ]
       }
     ];
 
+    // Phân loại Link: Google Drive hay Google Photos
     function detectLinkType(url) {
       const clean = (url || "").trim();
       if (!clean) return null;
@@ -90,6 +96,7 @@
       return "unknown";
     }
 
+    // Tách Folder ID từ link Google Drive
     function extractDriveFolderId(url) {
       if (!url) return null;
       const match1 = url.match(/\/folders\/([a-zA-Z0-9_-]+)/);
@@ -100,55 +107,29 @@
       return null;
     }
 
-    // Đọc HTML Google Photos trực tiếp qua danh sách CORS Proxy dự phòng (chạy ngay trên Netlify Drop)
-    async function scrapeGooglePhotosClientSide(shareUrl) {
-      const proxies = [
-        (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-        (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-        (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
-      ];
-
-      let html = "";
-      for (const buildProxy of proxies) {
-        try {
-          const res = await fetch(buildProxy(shareUrl));
-          if (res.ok) {
-            const text = await res.text();
-            if (text && text.includes("lh3.googleusercontent.com")) {
-              html = text;
-              break;
-            }
-          }
-        } catch (e) {
-          console.warn("Proxy retry:", e);
-        }
+    // Chuẩn hóa link tải trực tiếp cho cả Google Photos (=d) và Google Drive
+    function buildDirectDownloadLink(photo) {
+      if (photo.driveId) {
+        return `https://drive.google.com/uc?export=download&id=${photo.driveId}`;
       }
-
-      if (!html) {
-        throw new Error("Không thể đọc dữ liệu từ link Google Photos này. Hãy chắc chắn album đã bật chia sẻ công khai.");
+      const rawUrl = photo.fullUrl || photo.thumbUrl || "";
+      if (rawUrl.includes("googleusercontent.com")) {
+        const baseUrl = rawUrl.split("=")[0];
+        return `${baseUrl}=d`;
       }
-
-      const regex = /https:\/\/lh3\.googleusercontent\.com\/pw\/[a-zA-Z0-9_-]+/g;
-      const matches = html.match(regex) || [];
-      const uniqueUrls = [...new Set(matches)];
-
-      if (uniqueUrls.length === 0) {
-        throw new Error("Không tìm thấy ảnh nào trong album Google Photos.");
-      }
-      return uniqueUrls;
+      return rawUrl;
     }
 
-    // Tải Blob ảnh vượt CORS cho iPhone / Android
-    async function fetchImageBlobSafe(url) {
-      try {
-        const directRes = await fetch(url);
-        if (directRes.ok) return await directRes.blob();
-      } catch {}
-
-      const corsUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-      const proxyRes = await fetch(corsUrl);
-      if (!proxyRes.ok) throw new Error("Không tải được dữ liệu ảnh");
-      return await proxyRes.blob();
+    // Chuẩn hóa URL qua Proxy cho cả album cũ trong Firebase và album mới
+    function buildProxyUrl(photo) {
+      if (photo.driveId) {
+        return `/.netlify/functions/proxy?id=${photo.driveId}&name=${encodeURIComponent(photo.name)}`;
+      }
+      const directGooglePhotoUrl = buildDirectDownloadLink(photo);
+      if (directGooglePhotoUrl.includes("googleusercontent.com")) {
+        return `/.netlify/functions/proxy?url=${encodeURIComponent(directGooglePhotoUrl)}&name=${encodeURIComponent(photo.name)}`;
+      }
+      return photo.downloadUrl || photo.fullUrl;
     }
 
     function App() {
@@ -175,6 +156,7 @@
       const [saveProgress, setSaveProgress] = useState({ current: 0, total: 0 });
       const [toastMsg, setToastMsg] = useState(null);
 
+      // Form tạo album mới
       const [newTitle, setNewTitle] = useState("");
       const [newClient, setNewClient] = useState("");
       const [newStudio] = useState("CHUPANHGIARE STUDIO");
@@ -188,6 +170,7 @@
         setTimeout(() => setToastMsg(null), 3500);
       };
 
+      // Đăng nhập ẩn danh & Lắng nghe dữ liệu Firestore
       useEffect(() => {
         signInAnonymously(auth).catch((err) => console.warn("Auth warning:", err.message));
 
@@ -264,6 +247,7 @@
         }
       };
 
+      // Xử lý tạo Album từ cả Google Drive hoặc Google Photos
       const handleCreateAlbum = async (e) => {
         e.preventDefault();
         if (!newTitle.trim() || !sourceLink.trim()) {
@@ -306,19 +290,29 @@
               driveId: f.id,
               thumbUrl: `https://drive.google.com/thumbnail?id=${f.id}&sz=w1000`,
               fullUrl: `https://drive.google.com/thumbnail?id=${f.id}&sz=w2500`,
-              downloadUrl: `https://drive.google.com/uc?export=download&id=${f.id}`
+              downloadUrl: `/.netlify/functions/proxy?id=${f.id}&name=${encodeURIComponent(f.name)}`
             }));
           } else if (linkType === "google_photos") {
-            const baseUrls = await scrapeGooglePhotosClientSide(sourceLink.trim());
-            photos = baseUrls.map((baseUrl, idx) => {
+            const res = await fetch(`/.netlify/functions/photos?url=${encodeURIComponent(sourceLink.trim())}`);
+            const data = await res.json();
+
+            if (!res.ok || data.error) {
+              throw new Error(data.error || "Không đọc được album Google Photos. Hãy kiểm tra lại link chia sẻ công khai.");
+            }
+            if (!data.photos || data.photos.length === 0) {
+              throw new Error("Album Google Photos này chưa có ảnh hoặc chưa bật chia sẻ link.");
+            }
+
+            photos = data.photos.map((item, idx) => {
               const num = String(idx + 1).padStart(3, "0");
               const fileName = `IMG_${num}.JPG`;
+              const cleanBase = item.baseUrl.split("=")[0];
               return {
                 id: `gp-${idx}-${Date.now()}`,
                 name: fileName,
-                thumbUrl: `${baseUrl}=w1000`,
-                fullUrl: `${baseUrl}=w2500`,
-                downloadUrl: `${baseUrl}=d`
+                thumbUrl: `${cleanBase}=w1000`,
+                fullUrl: `${cleanBase}=w2500`,
+                downloadUrl: `/.netlify/functions/proxy?url=${encodeURIComponent(cleanBase + "=d")}&name=${encodeURIComponent(fileName)}`
               };
             });
           }
@@ -351,6 +345,25 @@
         }
       };
 
+      // Tải trực tiếp bằng thẻ <a> với link =d khi Proxy không khả dụng
+      const triggerDirectBrowserDownload = async (photosList) => {
+        for (let i = 0; i < photosList.length; i++) {
+          const p = photosList[i];
+          const directUrl = buildDirectDownloadLink(p);
+          const a = document.createElement("a");
+          a.href = directUrl;
+          a.download = p.name || `photo_${i + 1}.jpg`;
+          a.rel = "noopener noreferrer";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          if (i < photosList.length - 1) {
+            await new Promise((r) => setTimeout(r, 550));
+          }
+        }
+      };
+
+      // LƯU ẢNH VỀ BỘ NHỚ ĐIỆN THOẠI (ALBUM ẢNH iOS / ANDROID)
       const savePhotosToPhone = async (photosToSave) => {
         if (!photosToSave || photosToSave.length === 0) {
           showToast("Hãy tích chọn ít nhất 1 tấm ảnh để lưu!");
@@ -362,51 +375,63 @@
 
         try {
           const filesArray = [];
+          const failedDirectFallback = [];
+
           for (let i = 0; i < photosToSave.length; i++) {
             const p = photosToSave[i];
             setSaveProgress({ current: i + 1, total: photosToSave.length });
 
-            const blob = await fetchImageBlobSafe(p.downloadUrl || p.fullUrl);
-            const fileName = /\.(jpg|jpeg|png|webp)$/i.test(p.name) ? p.name : `${p.name}.jpg`;
-            const file = new File([blob], fileName, { type: blob.type || "image/jpeg" });
-            filesArray.push(file);
+            const proxyUrl = buildProxyUrl(p);
+            try {
+              const response = await fetch(proxyUrl);
+              if (!response.ok) throw new Error(`Proxy status ${response.status}`);
+
+              const blob = await response.blob();
+              if (blob.size < 1000) throw new Error("Invalid image blob");
+
+              const fileName = /\.(jpg|jpeg|png|webp)$/i.test(p.name) ? p.name : `${p.name}.jpg`;
+              const file = new File([blob], fileName, { type: blob.type || "image/jpeg" });
+              filesArray.push(file);
+            } catch (proxyErr) {
+              // Nếu Proxy lỗi với Google Photos, đưa vào danh sách tải trực tiếp qua tham số =d
+              failedDirectFallback.push(p);
+            }
           }
 
-          if (navigator.canShare && navigator.canShare({ files: filesArray })) {
-            await navigator.share({
-              files: filesArray,
-              title: currentAlbum.title,
-              text: `Lưu ${filesArray.length} ảnh từ ${currentAlbum.studioName}`
-            });
-            showToast("Hãy bấm 'Lưu X hình ảnh' (Save Images) trên bảng hiện ra để lưu vào Album ĐT!");
-          } else {
-            for (const file of filesArray) {
-              const blobUrl = URL.createObjectURL(file);
-              const a = document.createElement("a");
-              a.href = blobUrl;
-              a.download = file.name;
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-              URL.revokeObjectURL(blobUrl);
-              await new Promise((r) => setTimeout(r, 300));
-            }
-            showToast(`Đã tải ${filesArray.length} ảnh xuống thiết bị!`);
-          }
-        } catch (err) {
-          if (err.name !== "AbortError") {
-            showToast("Đang mở tải trực tiếp từng ảnh...");
-            photosToSave.forEach((p, idx) => {
-              setTimeout(() => {
+          // Nếu lấy được dữ liệu Blob qua Proxy -> Dùng Web Share API để lưu thẳng vào Album Ảnh ĐT
+          if (filesArray.length > 0) {
+            if (navigator.canShare && navigator.canShare({ files: filesArray })) {
+              await navigator.share({
+                files: filesArray,
+                title: currentAlbum.title,
+                text: `Lưu ${filesArray.length} ảnh từ ${currentAlbum.studioName}`
+              });
+              showToast("Hãy bấm 'Lưu X hình ảnh' (Save Images) trên bảng hiện ra để lưu vào Album ĐT!");
+            } else {
+              for (const file of filesArray) {
+                const blobUrl = URL.createObjectURL(file);
                 const a = document.createElement("a");
-                a.href = p.downloadUrl || p.fullUrl;
-                a.target = "_blank";
-                a.download = p.name;
+                a.href = blobUrl;
+                a.download = file.name;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
-              }, idx * 450);
-            });
+                URL.revokeObjectURL(blobUrl);
+                await new Promise((r) => setTimeout(r, 350));
+              }
+              showToast(`Đã tải ${filesArray.length} ảnh gốc xuống thiết bị!`);
+            }
+          }
+
+          // Tải dự phòng trực tiếp cho các ảnh Google Photos nếu proxy bị giới hạn
+          if (failedDirectFallback.length > 0) {
+            await triggerDirectBrowserDownload(failedDirectFallback);
+            showToast(`Đang tải trực tiếp ${failedDirectFallback.length} ảnh về mục Tải về (Downloads)!`);
+          }
+        } catch (err) {
+          if (err.name !== "AbortError") {
+            await triggerDirectBrowserDownload(photosToSave);
+            showToast("Đang tải trực tiếp ảnh về mục Tải về (Downloads)...");
           }
         } finally {
           setIsSavingPhone(false);
