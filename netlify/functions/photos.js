@@ -3,7 +3,7 @@ exports.handler = async (event) => {
   if (!shareUrl) {
     return {
       statusCode: 400,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
       body: JSON.stringify({ error: "Thiếu đường dẫn Google Photos" })
     };
   }
@@ -12,43 +12,37 @@ exports.handler = async (event) => {
     const response = await fetch(shareUrl, {
       redirect: "follow",
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
       }
     });
 
     if (!response.ok) {
-      throw new Error(`Không truy cập được link Google Photos (Mã lỗi ${response.status})`);
+      throw new Error("Không truy cập được link Google Photos (" + response.status + ")");
     }
 
     const html = await response.text();
     const regex = /https:\/\/lh3\.googleusercontent\.com\/pw\/[a-zA-Z0-9_-]+/g;
     const matches = html.match(regex) || [];
-    const uniqueUrls = [...new Set(matches)];
+    const uniqueUrls = Array.from(new Set(matches));
 
     if (uniqueUrls.length === 0) {
-      return {
-        statusCode: 404,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify({ error: "Không tìm thấy ảnh trong link này. Hãy kiểm tra lại quyền chia sẻ album Google Photos." })
-      };
+      throw new Error("Không tìm thấy ảnh nào. Hãy kiểm tra lại quyền chia sẻ công khai của album.");
     }
-
-    const photos = uniqueUrls.map((baseUrl) => ({ baseUrl }));
 
     return {
       statusCode: 200,
       headers: {
-        "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
-        "Cache-Control": "public, max-age=300"
+        "Content-Type": "application/json"
       },
-      body: JSON.stringify({ photos })
+      body: JSON.stringify({
+        photos: uniqueUrls.map((baseUrl) => ({ baseUrl }))
+      })
     };
   } catch (err) {
     return {
       statusCode: 500,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
       body: JSON.stringify({ error: err.message })
     };
   }
