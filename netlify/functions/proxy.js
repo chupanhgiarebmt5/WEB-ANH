@@ -7,56 +7,64 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: "Missing id or url" };
   }
 
-  let targetUrl = directUrl
-    ? directUrl
-    : `https://drive.google.com/uc?export=download&id=${fileId}`;
-
-  if (targetUrl.includes("googleusercontent.com")) {
-    const baseUrl = targetUrl.split("=")[0];
-    // Dùng =s0 (tải kích thước gốc không giới hạn) vì =d trên server-side đôi khi bị Google trả về trang xác nhận
-    targetUrl = `${baseUrl}=s0`;
+  // Tạo danh sách URL dự phòng cho Google Photos (=d, =s0, =w4000) để không bao giờ bị lỗi 502
+  const candidateUrls = [];
+  if (fileId) {
+    candidateUrls.push(`https://drive.google.com/uc?export=download&id=${fileId}`);
+    candidateUrls.push(`https://lh3.googleusercontent.com/d/${fileId}=s0`);
+  } else if (directUrl) {
+    if (directUrl.includes("googleusercontent.com")) {
+      const baseUrl = directUrl.split("=")[0];
+      candidateUrls.push(`${baseUrl}=d`);
+      candidateUrls.push(`${baseUrl}=s0`);
+      candidateUrls.push(`${baseUrl}=w4000`);
+    } else {
+      candidateUrls.push(directUrl);
+    }
   }
 
-  try {
-    const response = await fetch(targetUrl, {
-      redirect: "follow",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
-      }
-    });
+  for (const targetUrl of candidateUrls) {
+    try {
+      const response = await fetch(targetUrl, {
+        redirect: "follow",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+          "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
+        }
+      });
 
-    if (!response.ok) {
-      throw new Error(`Fetch status ${response.status}`);
+      if (!response.ok) continue;
+
+      const contentType = response.headers.get("content-type") || "image/jpeg";
+      if (contentType.includes("text/html")) continue;
+
+      const arrayBuffer = await response.arrayBuffer();
+      if (arrayBuffer.byteLength < 1000) continue;
+
+      const buffer = Buffer.from(arrayBuffer);
+
+      return {
+        statusCode: 200,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Content-Type": contentType,
+          "Content-Disposition": `attachment; filename="${encodeURIComponent(fileName)}"`,
+          "Cache-Control": "public, max-age=31536000"
+        },
+        body: buffer.toString("base64"),
+        isBase64Encoded: true
+      };
+    } catch (err) {
+      // Thử tham số dự phòng tiếp theo
     }
-
-    const contentType = response.headers.get("content-type") || "image/jpeg";
-    if (contentType.includes("text/html")) {
-      throw new Error("Received HTML instead of image binary");
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    return {
-      statusCode: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Content-Type": contentType,
-        "Content-Disposition": `attachment; filename="${encodeURIComponent(fileName)}"`,
-        "Cache-Control": "public, max-age=31536000"
-      },
-      body: buffer.toString("base64"),
-      isBase64Encoded: true
-    };
-  } catch (err) {
-    return {
-      statusCode: 502,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ error: err.message })
-    };
   }
+
+  return {
+    statusCode: 502,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ error: "Failed to fetch image from all candidate URLs" })
+  };
 };
